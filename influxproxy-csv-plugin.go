@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/influxdb/influxdb-go"
+	influxdb "github.com/influxdb/influxdb/client"
 	"github.com/influxproxy/influxproxy/plugin"
 )
 
