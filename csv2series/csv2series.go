@@ -3,17 +3,123 @@ package csv2series
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"sort"
-	// "errors"
-	// 	"flag"
-	// "fmt"
-	// 	"github.com/influxdb/influxdb-go"
-	// 	"io/ioutil"
-	// 	"log"
-	// 	"strconv"
-	// "strings"
-	// 	"path/filepath"
+	"strconv"
+	"unicode/utf8"
+
+	influxdb "github.com/influxdb/influxdb/client"
 )
+
+type Converter struct {
+	Table [][]string
+	Tree  *Node
+}
+
+func NewConverter(data []byte, separator string, header []string, hirarchy []string) (*Converter, error) {
+	c := &Converter{}
+
+	sep, _ := utf8.DecodeRune([]byte(separator))
+
+	err := c.ReadTable(data, sep)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(header) == 1 && header[0] == "" && len(c.Table) > 1 {
+		header = c.Table[0]
+		c.Table = c.Table[1:]
+	} else if len(c.Table) > 0 && len(header) != len(c.Table[0]) {
+		return nil, errors.New("Header length differs from columns in table.")
+	}
+
+	c.BuildTree(header, hirarchy)
+	return c, nil
+}
+
+func (c *Converter) ReadTable(data []byte, separator rune) error {
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.Comma = separator
+	table, err := reader.ReadAll()
+	if err != nil {
+		return err
+	}
+	c.Table = table
+	return nil
+}
+
+func (c *Converter) BuildTree(header []string, hirarchy []string) {
+	tree := &Node{}
+	branch := tree
+
+	var hIndex []int
+	for _, hName := range hirarchy {
+		for cNum, cName := range header {
+			if hName == cName {
+				hIndex = append(hIndex, cNum)
+			}
+		}
+	}
+
+	dataHeader := remove(header, hIndex...)
+
+	for _, row := range c.Table {
+		for _, hField := range hIndex {
+			branch = branch.getChild(row[hField])
+		}
+		row := remove(row, hIndex...)
+
+		values := make(map[string]string)
+		for cellNum, cell := range dataHeader {
+			values[cell] = row[cellNum]
+		}
+		branch.Values = append(branch.Values, values)
+		branch = tree
+	}
+	c.Tree = tree
+}
+
+func remove(s []string, items ...int) (out []string) {
+	out = append(out, s...)
+	sort.Sort(sort.Reverse(sort.IntSlice(items)))
+	for _, item := range items {
+		tmp := append(out[:item], out[item+1:]...)
+		out = tmp
+	}
+	return
+}
+
+func (c *Converter) GetAsSeries(prefix string, timestamp string) ([]*influxdb.Series, error) {
+	if prefix != "" {
+		prefix += "."
+	}
+	series := &Series{}
+
+	for sName, sValues := range c.Tree.Flatten() {
+		if sName != "" {
+			sName += "."
+		}
+		for _, values := range sValues {
+			time := values[timestamp]
+			for key, value := range values {
+				if key != timestamp {
+					name := prefix + sName + key
+					t, err := strconv.ParseFloat(time, 64)
+					if err != nil {
+						return nil, err
+					}
+					val, err := strconv.ParseFloat(value, 64)
+					if err != nil {
+						series.addTimeValue(name, t, value)
+					} else {
+						series.addTimeValue(name, t, val)
+					}
+				}
+			}
+		}
+	}
+	return *series, nil
+}
 
 type Node struct {
 	Name     string
@@ -35,69 +141,41 @@ func (n *Node) getChild(name string) *Node {
 	return child
 }
 
-func ReadTable(data []byte, separator string) ([][]string, error) {
-	tableReader := csv.NewReader(bytes.NewReader(data))
-	table, err := tableReader.ReadAll()
-	if err != nil {
-		return nil, err
+func (n *Node) Flatten() map[string][]map[string]string {
+	if len(n.Children) < 1 {
+		return map[string][]map[string]string{
+			n.Name: n.Values,
+		}
 	}
-	return table, err
-}
-
-func BuildTree(data [][]string, header []string, hirarchy []string) *Node {
-	tree := &Node{
-		Name: "/",
-	}
-	branch := tree
-
-	var hIndex []int
-	for _, hName := range hirarchy {
-		for cNum, cName := range header {
-			if hName == cName {
-				hIndex = append(hIndex, cNum)
+	out := make(map[string][]map[string]string)
+	for _, c := range n.Children {
+		cOut := c.Flatten()
+		for key, val := range cOut {
+			prefix := ""
+			if n.Name != "" {
+				prefix = n.Name + "."
 			}
+			out[prefix+key] = val
 		}
 	}
-
-	dataHeader := remove(header, hIndex...)
-
-	for _, row := range data {
-		for _, hField := range hIndex {
-			branch = branch.getChild(row[hField])
-		}
-		row := remove(row, hIndex...)
-
-		values := make(map[string]string)
-		for cellNum, cell := range dataHeader {
-			values[cell] = row[cellNum]
-		}
-		branch.Values = append(branch.Values, values)
-		branch = tree
-	}
-	return tree
+	return out
 }
 
-func remove(s []string, items ...int) (out []string) {
-	out = append(out, s...)
-	sort.Sort(sort.Reverse(sort.IntSlice(items)))
-	for _, item := range items {
-		tmp := append(out[:item], out[item+1:]...)
-		out = tmp
+type Series []*influxdb.Series
+
+func (s *Series) addTimeValue(name string, time float64, value interface{}) {
+	for _, serie := range *s {
+		if serie.GetName() == name {
+			serie.Points = append(serie.Points, []interface{}{time, value})
+			return
+		}
 	}
-	return
+	var points [][]interface{}
+	points = append(points, []interface{}{time, value})
+	serie := &influxdb.Series{
+		Name:    name,
+		Columns: []string{"time", "value"},
+		Points:  points,
+	}
+	*s = append(*s, serie)
 }
-
-// func GetAsSeries(data []byte, dest string, headerStr string, timeField string, thirdDimField string) ([]*influxdb.Series, error) {
-// 	var series []*influxdb.Series
-// 	for name, points := range m {
-// 		out := &influxdb.Series{
-// 			Name:    name,
-// 			Columns: []string{"time", "value"},
-// 			Points:  points,
-// 		}
-
-// 		series = append(series, out)
-// 	}
-// 	return series, nil
-
-// }

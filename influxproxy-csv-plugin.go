@@ -1,10 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
 
-	influxdb "github.com/influxdb/influxdb/client"
 	"github.com/influxproxy/influxproxy-csv-plugin/csv2series"
 	"github.com/influxproxy/influxproxy/plugin"
 )
@@ -13,7 +12,7 @@ type Functions struct{}
 
 func (f Functions) Describe() plugin.Description {
 	d := plugin.Description{
-		Description: "This plugin takes CSV files and pushes them to the given influxdb",
+		Description: "This plugin takes CSV files and pushes them to the given influxdb.",
 		Author:      "github.com/sontags",
 		Version:     "0.1.0",
 		Arguments: []plugin.Argument{
@@ -25,25 +24,25 @@ func (f Functions) Describe() plugin.Description {
 			},
 			{
 				Name:        "separator",
-				Description: "CSV separator character.",
+				Description: "CSV separator character. If multiple characters are provided, only the first character is considered.",
 				Optional:    true,
 				Default:     ",",
 			},
 			{
 				Name:        "header",
-				Description: "Header of the CSV table, colums separated with the same character as provided in 'separator' field.",
-				Optional:    false,
+				Description: "Header of the CSV table, colums separated with the same character as provided in 'separator' field. If no header is provided, the first line of the CSV data is considered to be the header.",
+				Optional:    true,
 				Default:     "",
 			},
 			{
-				Name:        "nesting",
-				Description: "Name of the fields that imply nesting, separated by character ',', ordered from top down.",
+				Name:        "hierarchy",
+				Description: "Name of the fields that imply nesting, separated by the same character as provided in 'separator' field, ordered from top down.",
 				Optional:    true,
 				Default:     "",
 			},
 			{
 				Name:        "timestamp",
-				Description: "Name of the field that contains the time stamp in epoch time (s)",
+				Description: "Name of the field that contains the time stamp in epoch time (ms).",
 				Optional:    false,
 				Default:     "",
 			},
@@ -53,19 +52,35 @@ func (f Functions) Describe() plugin.Description {
 }
 
 func (f Functions) Run(in plugin.Request) plugin.Response {
-	out, _ := csv2series.ReadTable(in.Body, ",")
+	prefix := in.Query.Get("prefix")
+	separator := in.Query.Get("separator")
+	if separator == "" {
+		separator = ","
+	}
+	timestamp := in.Query.Get("timestamp")
+	header := strings.Split(in.Query.Get("header"), separator)
+	hierarchy := strings.Split(in.Query.Get("hierarchy"), separator)
 
-	header := []string{"Menet", "Anna", "30", "Zurich"}
-	hirarchy := []string{}
+	conv, err := csv2series.NewConverter(in.Body, separator, header, hierarchy)
+	if err != nil {
+		return plugin.Response{
+			Series: nil,
+			Error:  err.Error(),
+		}
+	}
 
-	tree := csv2series.BuildTree(out, header, hirarchy)
+	series, err := conv.GetAsSeries(prefix, timestamp)
 
-	text, _ := json.Marshal(tree)
+	if err != nil {
+		return plugin.Response{
+			Series: nil,
+			Error:  err.Error(),
+		}
+	}
 
-	var series []*influxdb.Series
 	return plugin.Response{
 		Series: series,
-		Error:  string(text),
+		Error:  "",
 	}
 }
 
