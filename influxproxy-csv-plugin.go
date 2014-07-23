@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 
 	influxdb "github.com/influxdb/influxdb/client"
+	"github.com/influxproxy/influxproxy-csv-plugin/csv2series"
 	"github.com/influxproxy/influxproxy/plugin"
 )
 
@@ -51,11 +53,19 @@ func (f Functions) Describe() plugin.Description {
 }
 
 func (f Functions) Run(in plugin.Request) plugin.Response {
-	// TODO: implement...
+	out, _ := csv2series.ReadTable(in.Body, ",")
+
+	header := []string{"Menet", "Anna", "30", "Zurich"}
+	hirarchy := []string{}
+
+	tree := csv2series.BuildTree(out, header, hirarchy)
+
+	text, _ := json.Marshal(tree)
+
 	var series []*influxdb.Series
 	return plugin.Response{
 		Series: series,
-		Error:  "",
+		Error:  string(text),
 	}
 }
 
