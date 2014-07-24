@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	influxdb "github.com/influxdb/influxdb/client"
@@ -89,7 +90,23 @@ func remove(s []string, items ...int) (out []string) {
 	return
 }
 
-func (c *Converter) GetAsSeries(prefix string, timestamp string) ([]*influxdb.Series, error) {
+func (c *Converter) getTime(ts string, pattern string) (timestamp int64, err error) {
+	if pattern == "" {
+		timestamp, err = strconv.ParseInt(ts, 0, 64)
+		if err != nil {
+			return 0.0, err
+		}
+	} else {
+		t, err := time.Parse(pattern, ts)
+		if err != nil {
+			return 0.0, err
+		}
+		timestamp = t.Unix() * 1000
+	}
+	return
+}
+
+func (c *Converter) GetAsSeries(prefix string, timestamp string, timepattern string) ([]*influxdb.Series, error) {
 	if prefix != "" {
 		prefix += "."
 	}
@@ -100,19 +117,18 @@ func (c *Converter) GetAsSeries(prefix string, timestamp string) ([]*influxdb.Se
 			sName += "."
 		}
 		for _, values := range sValues {
-			time := values[timestamp]
+			time, err := c.getTime(values[timestamp], timepattern)
+			if err != nil {
+				return nil, err
+			}
 			for key, value := range values {
 				if key != timestamp {
 					name := prefix + sName + key
-					t, err := strconv.ParseFloat(time, 64)
-					if err != nil {
-						return nil, err
-					}
 					val, err := strconv.ParseFloat(value, 64)
 					if err != nil {
-						series.addTimeValue(name, t, value)
+						series.addTimeValue(name, time, value)
 					} else {
-						series.addTimeValue(name, t, val)
+						series.addTimeValue(name, time, val)
 					}
 				}
 			}
@@ -163,7 +179,7 @@ func (n *Node) Flatten() map[string][]map[string]string {
 
 type Series []*influxdb.Series
 
-func (s *Series) addTimeValue(name string, time float64, value interface{}) {
+func (s *Series) addTimeValue(name string, time int64, value interface{}) {
 	for _, serie := range *s {
 		if serie.GetName() == name {
 			serie.Points = append(serie.Points, []interface{}{time, value})

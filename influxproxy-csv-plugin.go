@@ -12,9 +12,9 @@ type Functions struct{}
 
 func (f Functions) Describe() plugin.Description {
 	d := plugin.Description{
-		Description: "This plugin takes CSV files and pushes them to the given influxdb.",
+		Description: "This plugin takes CSV files and pushes them to the given influxdb. The '#' char is NOT considered a comment.",
 		Author:      "github.com/sontags",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Arguments: []plugin.Argument{
 			{
 				Name:        "prefix",
@@ -42,9 +42,15 @@ func (f Functions) Describe() plugin.Description {
 			},
 			{
 				Name:        "timestamp",
-				Description: "Name of the field that contains the time stamp in epoch time (ms).",
+				Description: "Name of the field that contains the time stamp.",
 				Optional:    false,
 				Default:     "",
+			},
+			{
+				Name:        "timepattern",
+				Description: "Pattern that describes the format of the timestamp. The pattern is the date 'Mon Jan 2 15:04:05 -0700 MST 2006' represented in the date format used. Details at http://golang.org/pkg/time/#Parse",
+				Optional:    true,
+				Default:     "If no timepattern given, the timestamp is considered to be formated as a unix epoch in milliseconds",
 			},
 		},
 	}
@@ -52,6 +58,7 @@ func (f Functions) Describe() plugin.Description {
 }
 
 func (f Functions) Run(in plugin.Request) plugin.Response {
+	timepattern := in.Query.Get("timepattern")
 	prefix := in.Query.Get("prefix")
 	separator := in.Query.Get("separator")
 	if separator == "" {
@@ -69,7 +76,7 @@ func (f Functions) Run(in plugin.Request) plugin.Response {
 		}
 	}
 
-	series, err := conv.GetAsSeries(prefix, timestamp)
+	series, err := conv.GetAsSeries(prefix, timestamp, timepattern)
 
 	if err != nil {
 		return plugin.Response{
